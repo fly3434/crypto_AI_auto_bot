@@ -1,0 +1,57 @@
+mode:
+  dry_run: false
+  loop_seconds: 3600
+  starting_equity_usdt: 1000
+  target_monthly_return: 1.0
+
+openrouter:
+  model: openai/gpt-4o-mini
+  temperature: 0.1
+  max_tokens: 900
+  site_url: https://openrouter.ai/api/v1
+  app_title: Crypto AI Auto Bot
+
+binance:
+  # real
+  # BINANCE_BASE_URL=https://fapi.binance.com
+  # testnet
+  # BINANCE_BASE_URL=https://testnet.binancefuture.com
+  base_url: https://testnet.binancefuture.com
+  recv_window_ms: 5000
+  hedge_mode: false
+
+market:
+  symbols:
+    - BTCUSDT
+    - ETHUSDT
+    - BNBUSDT
+    - XRPUSDT
+    - SOLUSDT
+    - DOGEUSDT
+  interval: 15m
+  lookback_limit: 500
+  funding_limit: 20
+
+risk:
+  max_account_risk_per_trade: 0.01
+  max_position_notional_pct: 0.25
+  max_leverage: 5
+  min_confidence: 0.58
+  max_daily_loss_pct: 0.05
+  stop_loss_cooldown_minutes: 30
+  allow_high_risk_features: true
+
+optimizer:
+  enabled: true
+  min_trades: 12
+  max_evaluations: 600
+  rsi_buy_values: [25, 30, 35]
+  rsi_sell_values: [65, 70, 75]
+  atr_stop_multipliers: [1.0, 1.5, 2.0]
+  take_profit_r_values: [1.5, 2.2, 3.0]
+  holding_bars: [8, 16, 32]
+  leverages: [1, 2, 3, 5]
+
+logging:
+  journal_path: logs/trading_journal.jsonl
+  timezone: Asia/Taipei

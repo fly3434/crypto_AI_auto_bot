@@ -1,0 +1,2 @@
+"""Crypto AI Auto Bot."""
+
