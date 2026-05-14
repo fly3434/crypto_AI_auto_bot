@@ -2,5 +2,6 @@ numpy>=1.26
 pandas>=2.2
 PyYAML>=6.0
 requests>=2.32
+Flask>=3.0
+gunicorn>=22.0
 pytest>=8.0
-

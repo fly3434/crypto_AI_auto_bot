@@ -1,6 +1,6 @@
 mode:
   dry_run: false
-  loop_seconds: 3600
+  loop_seconds: 21600
   starting_equity_usdt: 1000
   target_monthly_return: 1.0
 

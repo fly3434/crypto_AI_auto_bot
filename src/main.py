@@ -15,13 +15,42 @@ from .optimizer import optimize_params
 from .risk import RiskManager
 
 
+@dataclasses.dataclass(frozen=True)
+class Runtime:
+    app_config: Any
+    exchange: BinanceFuturesClient
+    ai: OpenRouterAgent
+    risk_manager: RiskManager
+    executor: TradeExecutor
+    journal: Journal
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", default="config.yaml")
     parser.add_argument("--once", action="store_true", help="Run a single scan cycle and exit.")
     args = parser.parse_args()
 
-    app_config = load_config(args.config)
+    runtime = build_runtime(args.config)
+    if not bool(cfg(runtime.app_config, "mode.dry_run", True)):
+        validate_live_auth(runtime.exchange, runtime.journal)
+
+    while True:
+        run_cycle(
+            runtime.app_config.raw,
+            runtime.exchange,
+            runtime.ai,
+            runtime.risk_manager,
+            runtime.executor,
+            runtime.journal,
+        )
+        if args.once:
+            break
+        time.sleep(int(cfg(runtime.app_config, "mode.loop_seconds", 300)))
+
+
+def build_runtime(config_path: str = "config.yaml") -> Runtime:
+    app_config = load_config(config_path)
     journal = Journal(
         cfg(app_config, "logging.journal_path", "logs/trading_journal.jsonl"),
         timezone_name=cfg(app_config, "logging.timezone", "Asia/Taipei"),
@@ -35,14 +64,21 @@ def main() -> None:
     ai = OpenRouterAgent(app_config.openrouter_api_key, cfg(app_config, "openrouter", {}))
     risk_manager = RiskManager(cfg(app_config, "risk", {}), float(cfg(app_config, "mode.starting_equity_usdt", 1000)))
     executor = TradeExecutor(exchange, dry_run=bool(cfg(app_config, "mode.dry_run", True)))
-    if not bool(cfg(app_config, "mode.dry_run", True)):
-        validate_live_auth(exchange, journal)
+    return Runtime(app_config, exchange, ai, risk_manager, executor, journal)
 
-    while True:
-        run_cycle(app_config.raw, exchange, ai, risk_manager, executor, journal)
-        if args.once:
-            break
-        time.sleep(int(cfg(app_config, "mode.loop_seconds", 300)))
+
+def run_once(config_path: str = "config.yaml") -> dict[str, Any]:
+    runtime = build_runtime(config_path)
+    if not bool(cfg(runtime.app_config, "mode.dry_run", True)):
+        validate_live_auth(runtime.exchange, runtime.journal)
+    return run_cycle(
+        runtime.app_config.raw,
+        runtime.exchange,
+        runtime.ai,
+        runtime.risk_manager,
+        runtime.executor,
+        runtime.journal,
+    )
 
 
 def run_cycle(
@@ -52,12 +88,13 @@ def run_cycle(
     risk_manager: RiskManager,
     executor: TradeExecutor,
     journal: Journal,
-) -> None:
+) -> dict[str, Any]:
     symbols = config.get("market", {}).get("symbols", ["BTCUSDT"])
     interval = config.get("market", {}).get("interval", "15m")
     lookback = int(config.get("market", {}).get("lookback_limit", 500))
     funding_limit = int(config.get("market", {}).get("funding_limit", 20))
     equity = current_equity(exchange, float(config.get("mode", {}).get("starting_equity_usdt", 1000)))
+    summary: dict[str, Any] = {"symbols": [], "orders": 0, "errors": 0}
     for symbol in symbols:
         try:
             df = exchange.klines(symbol, interval, lookback)
@@ -97,11 +134,19 @@ def run_cycle(
                             "reason": "Skipped new entry because an open position already exists for this symbol.",
                         },
                     )
+                    summary["symbols"].append({"symbol": symbol, "action": decision.action, "status": "position_guard"})
                     continue
                 order_result = executor.execute(decision, risk, snapshot.close)
                 journal.write("order", {"symbol": symbol, "decision": dataclasses.asdict(decision), "result": order_result})
+                summary["orders"] += 1
+                summary["symbols"].append({"symbol": symbol, "action": decision.action, "status": "order"})
+            else:
+                summary["symbols"].append({"symbol": symbol, "action": decision.action, "status": "rejected"})
         except Exception as exc:
             journal.write("error", {"symbol": symbol, "error": repr(exc)})
+            summary["errors"] += 1
+            summary["symbols"].append({"symbol": symbol, "status": "error", "error": repr(exc)})
+    return summary
 
 
 def current_equity(exchange: BinanceFuturesClient, fallback: float) -> float:

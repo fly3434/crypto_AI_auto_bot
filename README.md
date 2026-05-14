@@ -27,6 +27,114 @@ python3 -m src.main --config config.yaml
 ```
 
 By default the bot runs in dry-run mode and will not place live orders.
+For a single scan cycle, run:
+
+```bash
+python3 -m src.main --config config.yaml --once
+```
+
+## Cloud Run + Cloud Scheduler
+
+This project includes a Cloud Run HTTP entrypoint at `POST /run`. Cloud Scheduler should call that endpoint every 6 hours; the container does not need to keep its own timer running.
+
+### 1. Prepare Google Cloud
+
+```bash
+gcloud auth login
+gcloud config set project YOUR_PROJECT_ID
+gcloud services enable run.googleapis.com cloudbuild.googleapis.com cloudscheduler.googleapis.com secretmanager.googleapis.com
+```
+
+Choose a region, for example:
+
+```bash
+export REGION=asia-east1
+export SERVICE=crypto-ai-auto-bot
+export RUNTIME_SA=crypto-bot-runner
+export SCHEDULER_SA=crypto-bot-scheduler
+```
+
+### 2. Store API keys in Secret Manager
+
+```bash
+printf '%s' 'YOUR_OPENROUTER_API_KEY' | gcloud secrets create openrouter-api-key --data-file=-
+printf '%s' 'YOUR_BINANCE_API_KEY' | gcloud secrets create binance-api-key --data-file=-
+printf '%s' 'YOUR_BINANCE_API_SECRET' | gcloud secrets create binance-api-secret --data-file=-
+```
+
+If the secrets already exist, add new versions instead:
+
+```bash
+printf '%s' 'YOUR_OPENROUTER_API_KEY' | gcloud secrets versions add openrouter-api-key --data-file=-
+printf '%s' 'YOUR_BINANCE_API_KEY' | gcloud secrets versions add binance-api-key --data-file=-
+printf '%s' 'YOUR_BINANCE_API_SECRET' | gcloud secrets versions add binance-api-secret --data-file=-
+```
+
+### 3. Deploy to Cloud Run
+
+```bash
+gcloud iam service-accounts create $RUNTIME_SA \
+  --display-name "Crypto bot Cloud Run runtime"
+
+export PROJECT_ID="$(gcloud config get-value project)"
+
+gcloud projects add-iam-policy-binding $PROJECT_ID \
+  --member "serviceAccount:$RUNTIME_SA@$PROJECT_ID.iam.gserviceaccount.com" \
+  --role roles/secretmanager.secretAccessor
+
+gcloud run deploy $SERVICE \
+  --source . \
+  --region $REGION \
+  --service-account "$RUNTIME_SA@$PROJECT_ID.iam.gserviceaccount.com" \
+  --no-allow-unauthenticated \
+  --concurrency 1 \
+  --timeout 3300 \
+  --memory 1Gi \
+  --set-env-vars CONFIG_PATH=config.yaml \
+  --set-secrets OPENROUTER_API_KEY=openrouter-api-key:latest,BINANCE_API_KEY=binance-api-key:latest,BINANCE_API_SECRET=binance-api-secret:latest
+```
+
+`--concurrency 1` helps avoid two trading cycles running at the same time on the same instance. The service is private; Cloud Scheduler will call it with OIDC authentication.
+
+### 4. Create the scheduler identity
+
+```bash
+gcloud iam service-accounts create $SCHEDULER_SA \
+  --display-name "Crypto bot Cloud Scheduler caller"
+
+export SERVICE_URL="$(gcloud run services describe $SERVICE --region $REGION --format='value(status.url)')"
+
+gcloud run services add-iam-policy-binding $SERVICE \
+  --region $REGION \
+  --member "serviceAccount:$SCHEDULER_SA@$PROJECT_ID.iam.gserviceaccount.com" \
+  --role roles/run.invoker
+```
+
+### 5. Trigger every 6 hours
+
+```bash
+gcloud scheduler jobs create http crypto-bot-every-6h \
+  --location $REGION \
+  --schedule "0 */6 * * *" \
+  --time-zone "Asia/Taipei" \
+  --uri "$SERVICE_URL/run" \
+  --http-method POST \
+  --oidc-service-account-email "$SCHEDULER_SA@$PROJECT_ID.iam.gserviceaccount.com" \
+  --oidc-token-audience "$SERVICE_URL"
+```
+
+You can test it manually:
+
+```bash
+gcloud scheduler jobs run crypto-bot-every-6h --location $REGION
+gcloud run services logs read $SERVICE --region $REGION --limit 100
+```
+
+Before using real Binance futures trading, verify `config.yaml` carefully:
+
+- `mode.dry_run: true` is safest for the first deployment test.
+- `binance.base_url: https://testnet.binancefuture.com` uses Binance Futures testnet.
+- `binance.base_url: https://fapi.binance.com` uses real Binance USDT-M futures.
 
 ## Environment Variables
 
