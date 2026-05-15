@@ -19,5 +19,7 @@ class Journal:
             "event_type": event_type,
             **payload,
         }
+        line = json.dumps(record, ensure_ascii=False, default=str)
+        print(line, flush=True)
         with self.path.open("a", encoding="utf-8") as fh:
-            fh.write(json.dumps(record, ensure_ascii=False, default=str) + "\n")
+            fh.write(line + "\n")
