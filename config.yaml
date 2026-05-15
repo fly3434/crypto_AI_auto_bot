@@ -55,3 +55,12 @@ optimizer:
 logging:
   journal_path: logs/trading_journal.jsonl
   timezone: Asia/Taipei
+  gcs:
+    bucket: ""  # Or set JOURNAL_GCS_BUCKET in Cloud Run env vars.
+    prefix: trading-journal
+    event_types:
+      - analysis
+      - order
+      - position_guard
+      - error
+      - auth_check

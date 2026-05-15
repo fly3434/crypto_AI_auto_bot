@@ -36,14 +36,17 @@ def main() -> None:
         validate_live_auth(runtime.exchange, runtime.journal)
 
     while True:
-        run_cycle(
-            runtime.app_config.raw,
-            runtime.exchange,
-            runtime.ai,
-            runtime.risk_manager,
-            runtime.executor,
-            runtime.journal,
-        )
+        try:
+            run_cycle(
+                runtime.app_config.raw,
+                runtime.exchange,
+                runtime.ai,
+                runtime.risk_manager,
+                runtime.executor,
+                runtime.journal,
+            )
+        finally:
+            runtime.journal.upload_run_logs()
         if args.once:
             break
         time.sleep(int(cfg(runtime.app_config, "mode.loop_seconds", 300)))
@@ -54,6 +57,9 @@ def build_runtime(config_path: str = "config.yaml") -> Runtime:
     journal = Journal(
         cfg(app_config, "logging.journal_path", "logs/trading_journal.jsonl"),
         timezone_name=cfg(app_config, "logging.timezone", "Asia/Taipei"),
+        gcs_bucket=cfg(app_config, "logging.gcs.bucket", ""),
+        gcs_prefix=cfg(app_config, "logging.gcs.prefix", "trading-journal"),
+        gcs_event_types=cfg(app_config, "logging.gcs.event_types", []),
     )
     exchange = BinanceFuturesClient(
         api_key=app_config.binance_api_key,
@@ -69,16 +75,19 @@ def build_runtime(config_path: str = "config.yaml") -> Runtime:
 
 def run_once(config_path: str = "config.yaml") -> dict[str, Any]:
     runtime = build_runtime(config_path)
-    if not bool(cfg(runtime.app_config, "mode.dry_run", True)):
-        validate_live_auth(runtime.exchange, runtime.journal)
-    return run_cycle(
-        runtime.app_config.raw,
-        runtime.exchange,
-        runtime.ai,
-        runtime.risk_manager,
-        runtime.executor,
-        runtime.journal,
-    )
+    try:
+        if not bool(cfg(runtime.app_config, "mode.dry_run", True)):
+            validate_live_auth(runtime.exchange, runtime.journal)
+        return run_cycle(
+            runtime.app_config.raw,
+            runtime.exchange,
+            runtime.ai,
+            runtime.risk_manager,
+            runtime.executor,
+            runtime.journal,
+        )
+    finally:
+        runtime.journal.upload_run_logs()
 
 
 def run_cycle(
