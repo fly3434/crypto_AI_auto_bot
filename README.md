@@ -11,6 +11,7 @@ An experimental AI-assisted Binance USDT-M futures trading bot. It collects mark
 - Runs a lightweight parameter search for RSI thresholds, ATR stop, take profit, holding time, leverage, and regime filters.
 - Sends a compact market state to OpenRouter and requires a JSON trading decision.
 - Applies deterministic risk gates before any order is placed.
+- Manages existing positions instead of blindly skipping them: same-side signals hold, weak opposite signals hold, confirmed reversals close, and strong risk-approved reversals may close and reopen the opposite side.
 - Logs every AI decision, feature snapshot, risk rejection, and order result to `logs/trading_journal.jsonl`.
 
 ## Quick Start
@@ -136,6 +137,28 @@ Before using real Binance futures trading, verify `config.yaml` carefully:
 - `binance.base_url: https://testnet.binancefuture.com` uses Binance Futures testnet.
 - `binance.base_url: https://fapi.binance.com` uses real Binance USDT-M futures.
 
+## Open Position Handling
+
+When a symbol already has an open position, the bot no longer skips every new signal automatically. It first builds a local position-management plan:
+
+- Same-side signal: keep holding the current position.
+- `HOLD` signal: keep holding the current position.
+- Opposite signal below `position_management.close_reversal_confidence`: keep holding and avoid churn.
+- Opposite signal at or above `position_management.close_reversal_confidence`: close the current position with a reduce-only market order.
+- Opposite signal at or above `position_management.reverse_confidence`, with `position_management.reverse_on_strong_signal: true` and risk approval: close the current position, then open the opposite side.
+
+Default thresholds:
+
+```yaml
+position_management:
+  enabled: true
+  close_reversal_confidence: 0.70
+  reverse_on_strong_signal: true
+  reverse_confidence: 0.80
+```
+
+Set `position_management.enabled: false` to restore the older behavior that skips new entries whenever an open position already exists.
+
 ## Environment Variables
 
 ```bash
@@ -154,7 +177,8 @@ The design allows aggressive objectives, but the runtime still enforces:
 - cooldown after stop loss
 - max daily loss circuit breaker
 - model output validation
-- reduce-only exits for closing positions
+- position management for existing positions
+- reduce-only exits before reversing or closing positions
 
 ## Useful Files
 
@@ -163,5 +187,6 @@ The design allows aggressive objectives, but the runtime still enforces:
 - `src/ai_agent.py`: OpenRouter integration and JSON decision schema.
 - `src/features.py`: technical feature generation.
 - `src/optimizer.py`: local historical parameter search.
+- `src/position_manager.py`: existing-position hold, close, and reverse rules.
 - `src/risk.py`: deterministic trade approval/rejection.
 - `logs/trading_journal.jsonl`: created at runtime.

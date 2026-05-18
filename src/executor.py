@@ -59,6 +59,26 @@ class TradeExecutor:
             "take_profit": take_profit,
         }
 
+    def close_position(self, symbol: str, position_amt: float) -> dict[str, Any]:
+        side = "SELL" if position_amt > 0 else "BUY"
+        rules = self.exchange.symbol_rules(symbol)
+        quantity = rules.quantity(abs(position_amt))
+        close_order = {"symbol": symbol, "side": side, "type": "MARKET", "quantity": quantity, "reduceOnly": "true"}
+        if self.dry_run:
+            return {
+                "dry_run": True,
+                "cancel_stale_algo_orders": {"symbol": symbol},
+                "close": close_order,
+            }
+
+        cancel_stale_algo_orders = self.exchange.cancel_all_algo_open_orders(symbol)
+        close = self.exchange.new_order(**close_order)
+        return {
+            "dry_run": False,
+            "cancel_stale_algo_orders": cancel_stale_algo_orders,
+            "close": close,
+        }
+
 
 def _algo_order_params(symbol: str, side: str, order_type: str, trigger_price: str, quantity: str) -> dict[str, Any]:
     return {

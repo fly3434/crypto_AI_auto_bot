@@ -12,6 +12,7 @@ from .executor import TradeExecutor
 from .features import build_features
 from .journal import Journal
 from .optimizer import optimize_params
+from .position_manager import plan_position_action
 from .risk import RiskManager
 
 
@@ -102,6 +103,7 @@ def run_cycle(
     interval = config.get("market", {}).get("interval", "15m")
     lookback = int(config.get("market", {}).get("lookback_limit", 500))
     funding_limit = int(config.get("market", {}).get("funding_limit", 20))
+    dry_run = bool(config.get("mode", {}).get("dry_run", True))
     equity = current_equity(exchange, float(config.get("mode", {}).get("starting_equity_usdt", 1000)))
     summary: dict[str, Any] = {"symbols": [], "orders": 0, "errors": 0}
     for symbol in symbols:
@@ -111,14 +113,17 @@ def run_cycle(
             mark = exchange.mark_price(symbol)
             snapshot = build_features(symbol, df, funding, mark)
             optimized = optimize_params(df, config.get("optimizer", {}))
+            position = current_position_or_zero(exchange, symbol) if dry_run else current_position(exchange, symbol)
             state = {
                 "symbol": symbol,
                 "price": snapshot.close,
                 "equity_usdt": equity,
+                "current_position_amt": position,
                 "monthly_target_return": config.get("mode", {}).get("target_monthly_return", 1.0),
                 "features": snapshot.features,
                 "optimized_params": dataclasses.asdict(optimized) if optimized else None,
                 "risk_limits": config.get("risk", {}),
+                "position_management": config.get("position_management", {}),
             }
             decision = ai.decide(state)
             risk = risk_manager.approve(decision, equity, snapshot.close)
@@ -131,9 +136,9 @@ def run_cycle(
                     "risk": dataclasses.asdict(risk),
                 },
             )
-            if risk.approved:
-                position = current_position(exchange, symbol)
-                if position != 0:
+            if position != 0:
+                position_settings = config.get("position_management", {})
+                if not bool(position_settings.get("enabled", True)):
                     journal.write(
                         "position_guard",
                         {
@@ -145,6 +150,47 @@ def run_cycle(
                     )
                     summary["symbols"].append({"symbol": symbol, "action": decision.action, "status": "position_guard"})
                     continue
+
+                plan = plan_position_action(position, decision, risk, position_settings)
+                if plan.action == "hold":
+                    journal.write(
+                        "position_management",
+                        {
+                            "symbol": symbol,
+                            "decision": dataclasses.asdict(decision),
+                            "risk": dataclasses.asdict(risk),
+                            "position_amt": position,
+                            "plan": dataclasses.asdict(plan),
+                        },
+                    )
+                    summary["symbols"].append(
+                        {"symbol": symbol, "action": decision.action, "status": "position_hold", "reason": plan.reason}
+                    )
+                    continue
+
+                close_result = executor.close_position(symbol, position)
+                order_result: dict[str, Any] = {"position_plan": dataclasses.asdict(plan), "close": close_result}
+                summary["orders"] += 1
+                status = "position_closed"
+                if plan.action == "close_and_reverse":
+                    reverse_result = executor.execute(decision, risk, snapshot.close)
+                    order_result["reverse"] = reverse_result
+                    summary["orders"] += 1
+                    status = "position_reversed"
+                journal.write(
+                    "position_management",
+                    {
+                        "symbol": symbol,
+                        "decision": dataclasses.asdict(decision),
+                        "risk": dataclasses.asdict(risk),
+                        "position_amt": position,
+                        "result": order_result,
+                    },
+                )
+                summary["symbols"].append({"symbol": symbol, "action": decision.action, "status": status})
+                continue
+
+            if risk.approved:
                 order_result = executor.execute(decision, risk, snapshot.close)
                 journal.write("order", {"symbol": symbol, "decision": dataclasses.asdict(decision), "result": order_result})
                 summary["orders"] += 1
@@ -169,6 +215,13 @@ def current_equity(exchange: BinanceFuturesClient, fallback: float) -> float:
 def current_position(exchange: BinanceFuturesClient, symbol: str) -> float:
     positions = exchange.position_risk(symbol)
     return sum(float(item.get("positionAmt", 0) or 0) for item in positions if item.get("symbol") == symbol)
+
+
+def current_position_or_zero(exchange: BinanceFuturesClient, symbol: str) -> float:
+    try:
+        return current_position(exchange, symbol)
+    except Exception:
+        return 0.0
 
 
 def validate_live_auth(exchange: BinanceFuturesClient, journal: Journal) -> None:

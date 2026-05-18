@@ -90,3 +90,31 @@ def test_executor_uses_algo_endpoint_for_stop_and_take_profit_live_orders():
     assert all(order["quantity"] == "2.16" for order in exchange.algo_orders)
     assert all(order["reduceOnly"] == "true" for order in exchange.algo_orders)
     assert all("closePosition" not in order for order in exchange.algo_orders)
+
+
+def test_executor_closes_existing_long_with_reduce_only_market_order():
+    exchange = FakeExchange()
+
+    result = TradeExecutor(exchange, dry_run=False).close_position("ETHUSDT", 2.160807)
+
+    assert result["close"] == {
+        "symbol": "ETHUSDT",
+        "side": "SELL",
+        "type": "MARKET",
+        "quantity": "2.16",
+        "reduceOnly": "true",
+    }
+    assert exchange.orders == [result["close"]]
+    assert exchange.canceled_algo_symbols == ["ETHUSDT"]
+
+
+def test_executor_closes_existing_short_with_buy_reduce_only_market_order_dry_run():
+    result = TradeExecutor(FakeExchange(), dry_run=True).close_position("ETHUSDT", -2.160807)
+
+    assert result["close"] == {
+        "symbol": "ETHUSDT",
+        "side": "BUY",
+        "type": "MARKET",
+        "quantity": "2.16",
+        "reduceOnly": "true",
+    }

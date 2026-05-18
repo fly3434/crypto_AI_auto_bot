@@ -41,6 +41,12 @@ risk:
   stop_loss_cooldown_minutes: 30
   allow_high_risk_features: true
 
+position_management:
+  enabled: true
+  close_reversal_confidence: 0.70
+  reverse_on_strong_signal: true
+  reverse_confidence: 0.80
+
 optimizer:
   enabled: true
   min_trades: 12
@@ -62,5 +68,6 @@ logging:
       - analysis
       - order
       - position_guard
+      - position_management
       - error
       - auth_check
