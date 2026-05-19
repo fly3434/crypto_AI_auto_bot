@@ -10,6 +10,7 @@ An experimental AI-assisted Binance USDT-M futures trading bot. It collects mark
 - Computes features such as RSI, ATR, z-score, volume spike, EMA distance, trend regime, realized volatility, funding pressure, and high-risk momentum/liquidation-proxy signals.
 - Runs a lightweight parameter search for RSI thresholds, ATR stop, take profit, holding time, leverage, and regime filters.
 - Sends a compact market state to OpenRouter and requires a JSON trading decision.
+- Adds recent closed-trade memory to each AI decision, including win rate, PnL, and recent losing setups when closed-trade journal records are available.
 - Applies deterministic risk gates before any order is placed.
 - Manages existing positions instead of blindly skipping them: same-side signals hold, weak opposite signals hold, confirmed reversals close, and strong risk-approved reversals may close and reopen the opposite side.
 - Logs every AI decision, feature snapshot, risk rejection, and order result to `logs/trading_journal.jsonl`.
@@ -159,6 +160,20 @@ position_management:
 
 Set `position_management.enabled: false` to restore the older behavior that skips new entries whenever an open position already exists.
 
+## Trade Memory
+
+Before each AI decision, the bot reads recent closed-trade records from `logs/trading_journal.jsonl` and adds a compact `trade_memory` object to the market state. The memory includes recent closed-trade count, win rate, total/average PnL, average PnL percentage, recent examples, and recent losing setups.
+
+The memory reader looks for closed-trade style journal events such as `trade_closed`, `closed_trade`, `exit`, or `position_exit` with fields like `symbol`, `decision`, `features`, `net_pnl`/`realized_pnl`/`pnl`, and optional `pnl_pct`/`exit_reason`. If no closed trades exist yet, it safely reports that memory is unavailable.
+
+```yaml
+trade_memory:
+  enabled: true
+  max_closed_trades: 20
+  max_examples: 5
+  max_mistakes: 5
+```
+
 ## Environment Variables
 
 ```bash
@@ -182,7 +197,7 @@ The design allows aggressive objectives, but the runtime still enforces:
 
 ## Useful Files
 
-- `config.yaml`: symbols, intervals, model, risk controls, optimizer settings.
+- `config.yaml`: symbols, multi-timeframe intervals, model, risk controls, optimizer settings.
 - `src/main.py`: loop entrypoint.
 - `src/ai_agent.py`: OpenRouter integration and JSON decision schema.
 - `src/features.py`: technical feature generation.

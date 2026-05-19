@@ -14,6 +14,7 @@ from .journal import Journal
 from .optimizer import optimize_params
 from .position_manager import plan_position_action
 from .risk import RiskManager
+from .trade_memory import build_trade_memory
 
 
 @dataclasses.dataclass(frozen=True)
@@ -99,20 +100,40 @@ def run_cycle(
     executor: TradeExecutor,
     journal: Journal,
 ) -> dict[str, Any]:
-    symbols = config.get("market", {}).get("symbols", ["BTCUSDT"])
-    interval = config.get("market", {}).get("interval", "15m")
-    lookback = int(config.get("market", {}).get("lookback_limit", 500))
+    market_config = config.get("market", {})
+    symbols = market_config.get("symbols", ["BTCUSDT"])
+    timeframes = market_timeframes(market_config)
+    primary_interval = str(market_config.get("primary_interval") or market_config.get("interval") or "6h")
     funding_limit = int(config.get("market", {}).get("funding_limit", 20))
     dry_run = bool(config.get("mode", {}).get("dry_run", True))
     equity = current_equity(exchange, float(config.get("mode", {}).get("starting_equity_usdt", 1000)))
+    journal_path = config.get("logging", {}).get("journal_path", "logs/trading_journal.jsonl")
+    trade_memory_settings = config.get("trade_memory", {})
     summary: dict[str, Any] = {"symbols": [], "orders": 0, "errors": 0}
     for symbol in symbols:
         try:
-            df = exchange.klines(symbol, interval, lookback)
             funding = exchange.funding_rate(symbol, funding_limit)
             mark = exchange.mark_price(symbol)
-            snapshot = build_features(symbol, df, funding, mark)
-            optimized = optimize_params(df, config.get("optimizer", {}))
+            timeframe_features: dict[str, dict[str, Any]] = {}
+            primary_df = None
+            snapshot = None
+            for timeframe in timeframes:
+                df = exchange.klines(symbol, timeframe["interval"], timeframe["lookback_limit"])
+                timeframe_snapshot = build_features(symbol, df, funding, mark)
+                timeframe_features[timeframe["label"]] = {
+                    "interval": timeframe["interval"],
+                    "role": timeframe["role"],
+                    "last_close": timeframe_snapshot.close,
+                    "features": timeframe_snapshot.features,
+                }
+                if timeframe["interval"].lower() == primary_interval.lower():
+                    primary_df = df
+                    snapshot = timeframe_snapshot
+            if primary_df is None or snapshot is None:
+                first_timeframe = timeframes[0]
+                primary_df = exchange.klines(symbol, first_timeframe["interval"], first_timeframe["lookback_limit"])
+                snapshot = build_features(symbol, primary_df, funding, mark)
+            optimized = optimize_params(primary_df, config.get("optimizer", {}))
             position = current_position_or_zero(exchange, symbol) if dry_run else current_position(exchange, symbol)
             state = {
                 "symbol": symbol,
@@ -121,7 +142,11 @@ def run_cycle(
                 "current_position_amt": position,
                 "monthly_target_return": config.get("mode", {}).get("target_monthly_return", 1.0),
                 "features": snapshot.features,
+                "primary_timeframe": primary_interval,
+                "analysis_sequence": [timeframe["label"] for timeframe in timeframes],
+                "timeframe_features": timeframe_features,
                 "optimized_params": dataclasses.asdict(optimized) if optimized else None,
+                "trade_memory": build_trade_memory(symbol, journal_path, trade_memory_settings),
                 "risk_limits": config.get("risk", {}),
                 "position_management": config.get("position_management", {}),
             }
@@ -202,6 +227,45 @@ def run_cycle(
             summary["errors"] += 1
             summary["symbols"].append({"symbol": symbol, "status": "error", "error": repr(exc)})
     return summary
+
+
+def market_timeframes(market_config: dict[str, Any]) -> list[dict[str, Any]]:
+    fallback_interval = str(market_config.get("interval", "6h"))
+    fallback_lookback = int(market_config.get("lookback_limit", 120))
+    configured = market_config.get("timeframes")
+    if not isinstance(configured, list) or not configured:
+        return [
+            {
+                "label": fallback_interval.upper(),
+                "interval": fallback_interval,
+                "lookback_limit": fallback_lookback,
+                "role": "primary_trade_signal",
+            }
+        ]
+
+    timeframes: list[dict[str, Any]] = []
+    for item in configured:
+        if not isinstance(item, dict):
+            continue
+        interval = str(item.get("interval") or "").strip()
+        if not interval:
+            continue
+        timeframes.append(
+            {
+                "label": str(item.get("label") or interval.upper()),
+                "interval": interval,
+                "lookback_limit": int(item.get("lookback_limit") or fallback_lookback),
+                "role": str(item.get("role") or "supporting_context"),
+            }
+        )
+    return timeframes or [
+        {
+            "label": fallback_interval.upper(),
+            "interval": fallback_interval,
+            "lookback_limit": fallback_lookback,
+            "role": "primary_trade_signal",
+        }
+    ]
 
 
 def current_equity(exchange: BinanceFuturesClient, fallback: float) -> float:

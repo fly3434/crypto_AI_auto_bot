@@ -28,8 +28,22 @@ market:
     - XRPUSDT
     - SOLUSDT
     - DOGEUSDT
-  interval: 15m
-  lookback_limit: 500
+  interval: 6h
+  primary_interval: 6h
+  lookback_limit: 120
+  timeframes:
+    - label: 1D
+      interval: 1d
+      lookback_limit: 60
+      role: macro_direction_and_risk_environment
+    - label: 6H
+      interval: 6h
+      lookback_limit: 120
+      role: primary_trade_signal
+    - label: 2H
+      interval: 2h
+      lookback_limit: 180
+      role: entry_stop_and_chase_confirmation
   funding_limit: 20
 
 risk:
@@ -57,6 +71,12 @@ optimizer:
   take_profit_r_values: [1.5, 2.2, 3.0]
   holding_bars: [8, 16, 32]
   leverages: [1, 2, 3, 5]
+
+trade_memory:
+  enabled: true
+  max_closed_trades: 20
+  max_examples: 5
+  max_mistakes: 5
 
 logging:
   journal_path: logs/trading_journal.jsonl

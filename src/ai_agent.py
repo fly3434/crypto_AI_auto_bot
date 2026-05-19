@@ -67,7 +67,17 @@ class OpenRouterAgent:
 
 SYSTEM_PROMPT = """You are an aggressive but risk-aware crypto futures trading strategist.
 Goal: attempt to double account equity in one month, but never bypass the risk rules provided.
-Use market features, optimized parameters, and high-risk features only when they improve expected value.
+Use market features, optimized parameters, trade_memory, and high-risk features only when they improve expected value.
+When trade_memory is available, treat it as recent performance feedback for this symbol.
+Prefer setups with positive recent expectancy, and reduce confidence or HOLD when similar recent trades lost money.
+Do not blindly copy past trades; current market features and risk rules have priority.
+Use the multi-timeframe data in timeframe_features in this exact order:
+1. First review 1D only for macro direction, regime, and risk environment.
+2. Then review 6H as the primary timeframe for deciding whether a BUY, SELL, or HOLD signal exists.
+3. Finally review 2H only to confirm entry quality, stop-loss distance, take-profit distance, and whether price is too extended to chase.
+If 1D direction/risk conflicts with the 6H signal, lower confidence or HOLD unless the setup is exceptionally strong.
+If 2H shows poor entry quality or obvious overextension, HOLD or reduce confidence instead of chasing.
+The top-level features field is the primary timeframe snapshot, usually 6H.
 Return only valid JSON with these keys:
 action: BUY, SELL, or HOLD.
 confidence: number from 0 to 1.
@@ -83,10 +93,13 @@ high_risk_features_used: array of feature names.
 
 
 def parse_decision(content: str, fallback_symbol: str) -> TradeDecision:
-    data = json.loads(content)
+    data = _load_decision_object(content)
     action = str(data.get("action", "HOLD")).upper()
     if action not in {"BUY", "SELL", "HOLD"}:
         action = "HOLD"
+    high_risk_features = data.get("high_risk_features_used", [])
+    if not isinstance(high_risk_features, list):
+        high_risk_features = []
     return TradeDecision(
         action=action,  # type: ignore[arg-type]
         confidence=_clamp(float(data.get("confidence", 0)), 0, 1),
@@ -97,10 +110,18 @@ def parse_decision(content: str, fallback_symbol: str) -> TradeDecision:
         take_profit_pct=max(0.0, float(data.get("take_profit_pct", 0))),
         max_holding_minutes=max(0, int(data.get("max_holding_minutes", 0))),
         rationale=str(data.get("rationale", ""))[:1200],
-        high_risk_features_used=list(data.get("high_risk_features_used", []))[:12],
+        high_risk_features_used=[str(item) for item in high_risk_features[:12]],
     )
+
+
+def _load_decision_object(content: str) -> dict[str, Any]:
+    data: Any = json.loads(content)
+    if isinstance(data, str):
+        data = json.loads(data)
+    if not isinstance(data, dict):
+        raise ValueError(f"AI decision response must be a JSON object, got {type(data).__name__}.")
+    return data
 
 
 def _clamp(value: float, low: float, high: float) -> float:
     return min(max(value, low), high)
-
