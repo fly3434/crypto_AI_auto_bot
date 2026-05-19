@@ -78,6 +78,27 @@ trade_memory:
   max_examples: 5
   max_mistakes: 5
 
+news:
+  enabled: true
+  # Effective fetch interval is max(mode.loop_seconds / 60, min_fetch_interval_minutes).
+  # This keeps high-frequency trading loops from high-frequency news scraping.
+  min_fetch_interval_minutes: 30
+  timeout_seconds: 5
+  freshness_hours: 24
+  max_items: 10
+  max_prompt_items: 10
+  cache_path: /tmp/crypto_ai_news_cache.json
+  sources:
+    - name: cryptocurrency.cv
+      type: json
+      url: https://cryptocurrency.cv/api/news
+    - name: Cointelegraph
+      type: rss
+      url: https://cointelegraph.com/rss
+    - name: CoinDesk
+      type: rss
+      url: https://www.coindesk.com/arc/outboundfeeds/rss/
+
 logging:
   journal_path: logs/trading_journal.jsonl
   timezone: Asia/Taipei

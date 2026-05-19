@@ -11,6 +11,7 @@ An experimental AI-assisted Binance USDT-M futures trading bot. It collects mark
 - Runs a lightweight parameter search for RSI thresholds, ATR stop, take profit, holding time, leverage, and regime filters.
 - Sends a compact market state to OpenRouter and requires a JSON trading decision.
 - Adds recent closed-trade memory to each AI decision, including win rate, PnL, and recent losing setups when closed-trade journal records are available.
+- Adds a compact crypto news context to each AI decision from cached RSS/JSON sources, using news only as narrative and risk-event context.
 - Applies deterministic risk gates before any order is placed.
 - Manages existing positions instead of blindly skipping them: same-side signals hold, weak opposite signals hold, confirmed reversals close, and strong risk-approved reversals may close and reopen the opposite side.
 - Logs every AI decision, feature snapshot, risk rejection, and order result to `logs/trading_journal.jsonl`.
@@ -173,6 +174,39 @@ trade_memory:
   max_examples: 5
   max_mistakes: 5
 ```
+
+## News Context
+
+Before each AI decision, the bot can add a compact `news_context` object to the market state. News is fetched once per scan cycle, shared across all configured symbols, deduplicated, scored, filtered to recent items, and cached so fast trading loops do not create fast news scraping.
+
+The effective fetch interval is:
+
+```text
+max(mode.loop_seconds / 60, news.min_fetch_interval_minutes)
+```
+
+Examples:
+
+```text
+5-minute trading trigger -> news refreshes every 30 minutes by default
+30-minute trading trigger -> news refreshes every 30 minutes by default
+6-hour trading trigger -> news refreshes every 6 hours
+```
+
+Default settings:
+
+```yaml
+news:
+  enabled: true
+  min_fetch_interval_minutes: 30
+  timeout_seconds: 5
+  freshness_hours: 24
+  max_items: 10
+  max_prompt_items: 10
+  cache_path: /tmp/crypto_ai_news_cache.json
+```
+
+The prompt instructs the model that news must not be used as a standalone trading signal and must not bypass deterministic risk rules.
 
 ## Environment Variables
 

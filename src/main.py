@@ -11,6 +11,7 @@ from .exchange import BinanceFuturesClient
 from .executor import TradeExecutor
 from .features import build_features
 from .journal import Journal
+from .news_context_builder import NewsContextBuilder
 from .optimizer import optimize_params
 from .position_manager import plan_position_action
 from .risk import RiskManager
@@ -25,6 +26,7 @@ class Runtime:
     risk_manager: RiskManager
     executor: TradeExecutor
     journal: Journal
+    news_context_builder: NewsContextBuilder
 
 
 def main() -> None:
@@ -46,6 +48,7 @@ def main() -> None:
                 runtime.risk_manager,
                 runtime.executor,
                 runtime.journal,
+                runtime.news_context_builder,
             )
         finally:
             runtime.journal.upload_run_logs()
@@ -72,7 +75,8 @@ def build_runtime(config_path: str = "config.yaml") -> Runtime:
     ai = OpenRouterAgent(app_config.openrouter_api_key, cfg(app_config, "openrouter", {}))
     risk_manager = RiskManager(cfg(app_config, "risk", {}), float(cfg(app_config, "mode.starting_equity_usdt", 1000)))
     executor = TradeExecutor(exchange, dry_run=bool(cfg(app_config, "mode.dry_run", True)))
-    return Runtime(app_config, exchange, ai, risk_manager, executor, journal)
+    news_context_builder = NewsContextBuilder(cfg(app_config, "news", {}))
+    return Runtime(app_config, exchange, ai, risk_manager, executor, journal, news_context_builder)
 
 
 def run_once(config_path: str = "config.yaml") -> dict[str, Any]:
@@ -87,6 +91,7 @@ def run_once(config_path: str = "config.yaml") -> dict[str, Any]:
             runtime.risk_manager,
             runtime.executor,
             runtime.journal,
+            runtime.news_context_builder,
         )
     finally:
         runtime.journal.upload_run_logs()
@@ -99,6 +104,7 @@ def run_cycle(
     risk_manager: RiskManager,
     executor: TradeExecutor,
     journal: Journal,
+    news_context_builder: NewsContextBuilder | None = None,
 ) -> dict[str, Any]:
     market_config = config.get("market", {})
     symbols = market_config.get("symbols", ["BTCUSDT"])
@@ -109,6 +115,10 @@ def run_cycle(
     equity = current_equity(exchange, float(config.get("mode", {}).get("starting_equity_usdt", 1000)))
     journal_path = config.get("logging", {}).get("journal_path", "logs/trading_journal.jsonl")
     trade_memory_settings = config.get("trade_memory", {})
+    trigger_interval_minutes = float(config.get("mode", {}).get("loop_seconds", 1800)) / 60
+    news_context = {}
+    if news_context_builder is not None:
+        news_context = news_context_builder.build(symbols, trigger_interval_minutes)
     summary: dict[str, Any] = {"symbols": [], "orders": 0, "errors": 0}
     for symbol in symbols:
         try:
@@ -147,6 +157,7 @@ def run_cycle(
                 "timeframe_features": timeframe_features,
                 "optimized_params": dataclasses.asdict(optimized) if optimized else None,
                 "trade_memory": build_trade_memory(symbol, journal_path, trade_memory_settings),
+                "news_context": news_context,
                 "risk_limits": config.get("risk", {}),
                 "position_management": config.get("position_management", {}),
             }
