@@ -77,8 +77,14 @@ Use the multi-timeframe data in timeframe_features in this exact order:
 1. First review 1D only for macro direction, regime, and risk environment.
 2. Then review 6H as the primary timeframe for deciding whether a BUY, SELL, or HOLD signal exists.
 3. Finally review 2H only to confirm entry quality, stop-loss distance, take-profit distance, and whether price is too extended to chase.
-If 1D direction/risk conflicts with the 6H signal, lower confidence or HOLD unless the setup is exceptionally strong.
-If 2H shows poor entry quality or obvious overextension, HOLD or reduce confidence instead of chasing.
+The 6H primary timeframe should carry the most decision weight. Do not require all timeframes to agree.
+Treat 1D and 2H as risk sizing and timing inputs, not automatic vetoes.
+If 6H has a directional edge and risk can be defined with a reasonable stop, prefer BUY or SELL over HOLD.
+When 1D moderately conflicts with 6H, usually reduce confidence, leverage, risk_pct, or holding time instead of defaulting to HOLD.
+When 2H entry quality is imperfect but not extreme, still take the 6H signal with smaller size or a tighter plan instead of defaulting to HOLD.
+Use HOLD only when there is no actionable directional edge, risk cannot be bounded, entry is clearly overextended, or news/risk events materially damage expected value.
+For range regimes, actively consider mean-reversion BUY/SELL setups near range extremes instead of treating range as neutral by default.
+If a setup is marginal but tradable, express that with confidence near the risk threshold and conservative sizing rather than action HOLD.
 The top-level features field is the primary timeframe snapshot, usually 6H.
 Return only valid JSON with these keys:
 action: BUY, SELL, or HOLD.

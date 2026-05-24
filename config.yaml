@@ -6,7 +6,7 @@ mode:
 
 openrouter:
   model: openai/gpt-4o-mini
-  temperature: 0.1
+  temperature: 0.25
   max_tokens: 900
   site_url: https://openrouter.ai/api/v1
   app_title: Crypto AI Auto Bot
@@ -50,7 +50,7 @@ risk:
   max_account_risk_per_trade: 0.01
   max_position_notional_pct: 0.25
   max_leverage: 5
-  min_confidence: 0.58
+  min_confidence: 0.55
   max_daily_loss_pct: 0.05
   stop_loss_cooldown_minutes: 30
   allow_high_risk_features: true

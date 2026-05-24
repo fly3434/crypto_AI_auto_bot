@@ -2,7 +2,7 @@ import json
 
 import pytest
 
-from src.ai_agent import parse_decision
+from src.ai_agent import SYSTEM_PROMPT, parse_decision
 
 
 def test_parse_decision_handles_json_object():
@@ -70,3 +70,9 @@ def test_parse_decision_ignores_non_list_high_risk_features():
     )
 
     assert decision.high_risk_features_used == []
+
+
+def test_system_prompt_does_not_treat_secondary_timeframes_as_vetoes():
+    assert "Do not require all timeframes to agree." in SYSTEM_PROMPT
+    assert "not automatic vetoes" in SYSTEM_PROMPT
+    assert "prefer BUY or SELL over HOLD" in SYSTEM_PROMPT
