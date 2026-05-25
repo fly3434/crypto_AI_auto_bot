@@ -4,6 +4,10 @@ mode:
   starting_equity_usdt: 1000
   target_monthly_return: 1.0
 
+# 0 = extremely conservative, 100 = extremely aggressive.
+# Higher values make the AI prefer BUY/SELL over HOLD more often and lower the local confidence gate.
+trading_aggressiveness: 90
+
 openrouter:
   model: openai/gpt-4o-mini
   temperature: 0.25

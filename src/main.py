@@ -73,7 +73,9 @@ def build_runtime(config_path: str = "config.yaml") -> Runtime:
         recv_window_ms=cfg(app_config, "binance.recv_window_ms", 5000),
     )
     ai = OpenRouterAgent(app_config.openrouter_api_key, cfg(app_config, "openrouter", {}))
-    risk_manager = RiskManager(cfg(app_config, "risk", {}), float(cfg(app_config, "mode.starting_equity_usdt", 1000)))
+    risk_settings = dict(cfg(app_config, "risk", {}))
+    risk_settings["trading_aggressiveness"] = trading_aggressiveness(app_config.raw)
+    risk_manager = RiskManager(risk_settings, float(cfg(app_config, "mode.starting_equity_usdt", 1000)))
     executor = TradeExecutor(exchange, dry_run=bool(cfg(app_config, "mode.dry_run", True)))
     news_context_builder = NewsContextBuilder(cfg(app_config, "news", {}))
     return Runtime(app_config, exchange, ai, risk_manager, executor, journal, news_context_builder)
@@ -113,6 +115,7 @@ def run_cycle(
     funding_limit = int(config.get("market", {}).get("funding_limit", 20))
     dry_run = bool(config.get("mode", {}).get("dry_run", True))
     equity = current_equity(exchange, float(config.get("mode", {}).get("starting_equity_usdt", 1000)))
+    aggressiveness = trading_aggressiveness(config)
     journal_path = config.get("logging", {}).get("journal_path", "logs/trading_journal.jsonl")
     trade_memory_settings = config.get("trade_memory", {})
     trigger_interval_minutes = float(config.get("mode", {}).get("loop_seconds", 1800)) / 60
@@ -151,6 +154,11 @@ def run_cycle(
                 "equity_usdt": equity,
                 "current_position_amt": position,
                 "monthly_target_return": config.get("mode", {}).get("target_monthly_return", 1.0),
+                "trading_aggressiveness": {
+                    "score": aggressiveness,
+                    "scale": "0 extremely conservative, 100 extremely aggressive",
+                    "guidance": aggressiveness_guidance(aggressiveness),
+                },
                 "features": snapshot.features,
                 "primary_timeframe": primary_interval,
                 "analysis_sequence": [timeframe["label"] for timeframe in timeframes],
@@ -158,7 +166,7 @@ def run_cycle(
                 "optimized_params": dataclasses.asdict(optimized) if optimized else None,
                 "trade_memory": build_trade_memory(symbol, journal_path, trade_memory_settings),
                 "news_context": news_context,
-                "risk_limits": config.get("risk", {}),
+                "risk_limits": {**config.get("risk", {}), "trading_aggressiveness": aggressiveness},
                 "position_management": config.get("position_management", {}),
             }
             decision = ai.decide(state)
@@ -240,6 +248,22 @@ def run_cycle(
     return summary
 
 
+def trading_aggressiveness(config: dict[str, Any]) -> int:
+    return int(_clamp(float(config.get("trading_aggressiveness", 75)), 0, 100))
+
+
+def aggressiveness_guidance(score: int) -> str:
+    if score >= 80:
+        return "Very aggressive: prefer BUY or SELL when there is a tradable directional edge and risk is bounded."
+    if score >= 60:
+        return "Moderately aggressive: choose BUY or SELL for marginal but tradable setups; use HOLD for weak or unbounded risk."
+    if score >= 40:
+        return "Balanced: require a clearer edge before BUY or SELL."
+    if score >= 20:
+        return "Conservative: prefer HOLD unless the edge is clear and multi-factor confirmation is strong."
+    return "Extremely conservative: use HOLD by default unless the setup is exceptional."
+
+
 def market_timeframes(market_config: dict[str, Any]) -> list[dict[str, Any]]:
     fallback_interval = str(market_config.get("interval", "6h"))
     fallback_lookback = int(market_config.get("lookback_limit", 120))
@@ -277,6 +301,10 @@ def market_timeframes(market_config: dict[str, Any]) -> list[dict[str, Any]]:
             "role": "primary_trade_signal",
         }
     ]
+
+
+def _clamp(value: float, low: float, high: float) -> float:
+    return min(max(value, low), high)
 
 
 def current_equity(exchange: BinanceFuturesClient, fallback: float) -> float:

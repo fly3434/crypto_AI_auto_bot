@@ -24,8 +24,9 @@ class RiskManager:
     def approve(self, decision: TradeDecision, equity: float, price: float) -> RiskResult:
         if decision.action == "HOLD":
             return RiskResult(False, "AI chose HOLD.")
-        if decision.confidence < float(self.settings.get("min_confidence", 0.58)):
-            return RiskResult(False, "Confidence below threshold.")
+        min_confidence = self._effective_min_confidence()
+        if decision.confidence < min_confidence:
+            return RiskResult(False, f"Confidence below threshold ({min_confidence:.2f}).")
         if decision.stop_loss_pct <= 0:
             return RiskResult(False, "Missing stop loss distance.")
         if self._daily_loss_exceeded(equity):
@@ -54,3 +55,8 @@ class RiskManager:
         max_loss = float(self.settings.get("max_daily_loss_pct", 0.05))
         return equity < self.starting_equity * (1 - max_loss)
 
+    def _effective_min_confidence(self) -> float:
+        base = float(self.settings.get("min_confidence", 0.58))
+        aggressiveness = min(max(float(self.settings.get("trading_aggressiveness", 75)), 0), 100)
+        adjustment = (aggressiveness - 50) / 100 * 0.20
+        return min(max(base - adjustment, 0.35), 0.85)

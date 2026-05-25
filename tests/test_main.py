@@ -1,4 +1,4 @@
-from src.main import current_position, current_position_or_zero, market_timeframes
+from src.main import current_position, current_position_or_zero, market_timeframes, trading_aggressiveness
 
 
 class FakeExchange:
@@ -44,3 +44,9 @@ def test_market_timeframes_keeps_single_interval_fallback():
     assert market_timeframes({"interval": "15m", "lookback_limit": 500}) == [
         {"label": "15M", "interval": "15m", "lookback_limit": 500, "role": "primary_trade_signal"}
     ]
+
+
+def test_trading_aggressiveness_defaults_and_clamps_to_score_range():
+    assert trading_aggressiveness({}) == 75
+    assert trading_aggressiveness({"trading_aggressiveness": -1}) == 0
+    assert trading_aggressiveness({"trading_aggressiveness": 101}) == 100
