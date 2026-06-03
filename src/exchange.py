@@ -146,6 +146,10 @@ class BinanceFuturesClient:
     def new_algo_order(self, **params: Any) -> dict[str, Any]:
         return self._request("POST", "/fapi/v1/algoOrder", params, signed=True)
 
+    def open_algo_orders(self, symbol: str) -> list[dict[str, Any]]:
+        result = self._request("GET", "/fapi/v1/algoOpenOrders", {"symbol": symbol}, signed=True)
+        return result if isinstance(result, list) else [result]
+
     def cancel_all_algo_open_orders(self, symbol: str) -> dict[str, Any]:
         return self._request("DELETE", "/fapi/v1/algoOpenOrders", {"symbol": symbol}, signed=True)
 

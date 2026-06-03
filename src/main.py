@@ -8,7 +8,7 @@ from typing import Any
 from .ai_agent import OpenRouterAgent
 from .config import cfg, load_config
 from .exchange import BinanceFuturesClient
-from .executor import TradeExecutor
+from .executor import TradeExecutor, UnprotectedPositionError
 from .features import build_features
 from .journal import Journal
 from .news_context_builder import NewsContextBuilder
@@ -241,6 +241,10 @@ def run_cycle(
                 summary["symbols"].append({"symbol": symbol, "action": decision.action, "status": "order"})
             else:
                 summary["symbols"].append({"symbol": symbol, "action": decision.action, "status": "rejected"})
+        except UnprotectedPositionError as exc:
+            journal.write("error", {"symbol": symbol, "error": repr(exc), "result": exc.result})
+            summary["errors"] += 1
+            summary["symbols"].append({"symbol": symbol, "status": "error", "error": repr(exc), "result": exc.result})
         except Exception as exc:
             journal.write("error", {"symbol": symbol, "error": repr(exc)})
             summary["errors"] += 1

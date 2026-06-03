@@ -14,6 +14,7 @@ An experimental AI-assisted Binance USDT-M futures trading bot. It collects mark
 - Adds a compact crypto news context to each AI decision from cached RSS/JSON sources, using news only as narrative and risk-event context.
 - Applies deterministic risk gates before any order is placed.
 - Manages existing positions instead of blindly skipping them: same-side signals hold, weak opposite signals hold, confirmed reversals close, and strong risk-approved reversals may close and reopen the opposite side.
+- Verifies live stop-loss and take-profit algo orders after entry, retries missing protection, and attempts a fail-safe close if protection cannot be confirmed.
 - Logs every AI decision, feature snapshot, risk rejection, and order result to `logs/trading_journal.jsonl`.
 
 ## Quick Start
@@ -161,6 +162,20 @@ position_management:
 
 Set `position_management.enabled: false` to restore the older behavior that skips new entries whenever an open position already exists.
 
+## Live Order Protection
+
+In live mode, a new approved entry is not treated as complete just because the market entry was accepted. After the entry order, `src/executor.py` submits the reduce-only stop-loss and take-profit algo orders, then queries Binance open algo orders to confirm that both protective orders exist with the expected symbol, side, type, trigger price, quantity, and `reduceOnly` flag.
+
+If either protective order is missing, the executor retries the missing order once and checks again. If protection still cannot be confirmed, the executor starts a fail-safe path:
+
+- Re-read the latest actual position from Binance instead of trusting the earlier snapshot.
+- If the position is already flat, cancel stale algo orders and mark the fail-safe as closed.
+- If the position is still open and its side matches the just-created entry, send a reduce-only market order to close it.
+- Cancel stale algo orders after the fail-safe close so a partial protection attempt does not leave old conditional orders behind.
+- If the fail-safe cannot close the position, raise `UnprotectedPositionError`; `src/main.py` writes the full entry/protection/fail-safe result into the `error` journal event.
+
+Manual or strategy-driven closes also refresh the latest Binance position immediately before sending the reduce-only close order. This avoids reduce-only rejections caused by stale position quantities, already-flat positions, or positions that changed between analysis and execution.
+
 ## Trade Memory
 
 Before each AI decision, the bot reads recent closed-trade records from `logs/trading_journal.jsonl` and adds a compact `trade_memory` object to the market state. The memory includes recent closed-trade count, win rate, total/average PnL, average PnL percentage, recent examples, and recent losing setups.
@@ -228,6 +243,7 @@ The design allows aggressive objectives, but the runtime still enforces:
 - model output validation
 - position management for existing positions
 - reduce-only exits before reversing or closing positions
+- live stop-loss/take-profit confirmation with retry and fail-safe close
 
 ## Useful Files
 
@@ -236,6 +252,8 @@ The design allows aggressive objectives, but the runtime still enforces:
 - `src/ai_agent.py`: OpenRouter integration and JSON decision schema.
 - `src/features.py`: technical feature generation.
 - `src/optimizer.py`: local historical parameter search.
+- `src/executor.py`: live/dry-run order execution, protective order confirmation, and fail-safe close behavior.
 - `src/position_manager.py`: existing-position hold, close, and reverse rules.
 - `src/risk.py`: deterministic trade approval/rejection.
+- `src/exchange.py`: Binance Futures REST client, including order, algo order, and position endpoints.
 - `logs/trading_journal.jsonl`: created at runtime.
