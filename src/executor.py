@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
@@ -67,14 +68,23 @@ class TradeExecutor:
         try:
             for label, params in protective_orders.items():
                 result[label] = self.exchange.new_algo_order(**params)
-            result["protective_order_check"] = self._ensure_protective_orders(decision.symbol, protective_orders)
-            if not result["protective_order_check"].get("ok"):
-                raise RuntimeError(f"Missing protective orders: {result['protective_order_check'].get('missing')}")
         except Exception as exc:
             result["protective_order_error"] = repr(exc)
             result["fail_safe"] = self._fail_safe_close_position(decision.symbol, side)
             if not result["fail_safe"].get("closed"):
                 raise UnprotectedPositionError(decision.symbol, result) from exc
+            return result
+        try:
+            result["protective_order_check"] = self._check_protective_orders(decision.symbol, protective_orders)
+            if not result["protective_order_check"].get("ok"):
+                result["protective_order_warning"] = (
+                    "Protective orders were accepted by Binance but were not confirmed in open algo orders."
+                )
+        except Exception as exc:
+            result["protective_order_warning"] = (
+                "Protective orders were accepted by Binance but open algo order confirmation failed."
+            )
+            result["protective_order_check_error"] = repr(exc)
         return result
 
     def close_position(self, symbol: str, position_amt: float) -> dict[str, Any]:
@@ -110,21 +120,24 @@ class TradeExecutor:
             "close": close,
         }
 
-    def _ensure_protective_orders(
+    def _check_protective_orders(
         self, symbol: str, expected_orders: dict[str, dict[str, Any]]
     ) -> dict[str, Any]:
-        open_orders = self.exchange.open_algo_orders(symbol)
-        missing = _missing_protective_orders(open_orders, expected_orders)
-        retried: dict[str, Any] = {}
-        for label in missing:
-            retried[label] = self.exchange.new_algo_order(**expected_orders[label])
-        if retried:
+        attempts = []
+        open_orders: list[dict[str, Any]] = []
+        missing = list(expected_orders)
+        for delay_seconds in (0.0, 0.5, 1.0):
+            if delay_seconds:
+                time.sleep(delay_seconds)
             open_orders = self.exchange.open_algo_orders(symbol)
             missing = _missing_protective_orders(open_orders, expected_orders)
+            attempts.append({"missing": missing, "open_algo_order_count": len(open_orders)})
+            if not missing:
+                break
         return {
             "ok": not missing,
             "missing": missing,
-            "retried": retried,
+            "attempts": attempts,
             "open_algo_order_count": len(open_orders),
         }
 

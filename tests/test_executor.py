@@ -140,7 +140,7 @@ def test_executor_refreshes_position_before_live_close():
     assert exchange.canceled_algo_symbols == []
 
 
-def test_executor_closes_entry_when_protective_orders_cannot_be_confirmed():
+def test_executor_does_not_close_entry_when_protective_orders_are_accepted_but_not_confirmed():
     class MissingOpenAlgoExchange(FakeExchange):
         def new_order(self, **params):
             self.orders.append(params)
@@ -172,6 +172,44 @@ def test_executor_closes_entry_when_protective_orders_cannot_be_confirmed():
 
     assert result["protective_order_check"]["ok"] is False
     assert result["protective_order_check"]["missing"] == ["stop", "take_profit"]
+    assert "protective_order_warning" in result
+    assert "fail_safe" not in result
+    assert exchange.orders == [{"symbol": "ETHUSDT", "side": "SELL", "type": "MARKET", "quantity": "2.16"}]
+
+
+def test_executor_closes_entry_when_protective_order_creation_fails():
+    class FailingAlgoExchange(FakeExchange):
+        def new_order(self, **params):
+            self.orders.append(params)
+            if params.get("reduceOnly") != "true":
+                self.positions = [{"symbol": params["symbol"], "positionAmt": "-2.16"}]
+            else:
+                self.positions = [{"symbol": params["symbol"], "positionAmt": "0"}]
+            return params
+
+        def new_algo_order(self, **params):
+            if params["type"] == "TAKE_PROFIT_MARKET":
+                raise RuntimeError("take profit rejected")
+            return super().new_algo_order(**params)
+
+    exchange = FailingAlgoExchange()
+    decision = TradeDecision(
+        action="SELL",
+        confidence=0.75,
+        symbol="ETHUSDT",
+        leverage=5,
+        risk_pct=0.01,
+        stop_loss_pct=0.01,
+        take_profit_pct=0.022,
+        max_holding_minutes=240,
+        rationale="test",
+        high_risk_features_used=[],
+    )
+    risk = RiskResult(True, "Approved.", quantity=2.160807, leverage=5)
+
+    result = TradeExecutor(exchange, dry_run=False).execute(decision, risk, price=2313.95)
+
+    assert result["protective_order_error"] == "RuntimeError('take profit rejected')"
     assert result["fail_safe"]["closed"] is True
     assert exchange.orders[-1] == {
         "symbol": "ETHUSDT",
@@ -180,3 +218,37 @@ def test_executor_closes_entry_when_protective_orders_cannot_be_confirmed():
         "quantity": "2.16",
         "reduceOnly": "true",
     }
+
+
+def test_executor_does_not_close_entry_when_protective_order_confirmation_errors():
+    class ConfirmationErrorExchange(FakeExchange):
+        def new_order(self, **params):
+            self.orders.append(params)
+            if params.get("reduceOnly") != "true":
+                self.positions = [{"symbol": params["symbol"], "positionAmt": "-2.16"}]
+            return params
+
+        def open_algo_orders(self, symbol):
+            raise RuntimeError("confirmation unavailable")
+
+    exchange = ConfirmationErrorExchange()
+    decision = TradeDecision(
+        action="SELL",
+        confidence=0.75,
+        symbol="ETHUSDT",
+        leverage=5,
+        risk_pct=0.01,
+        stop_loss_pct=0.01,
+        take_profit_pct=0.022,
+        max_holding_minutes=240,
+        rationale="test",
+        high_risk_features_used=[],
+    )
+    risk = RiskResult(True, "Approved.", quantity=2.160807, leverage=5)
+
+    result = TradeExecutor(exchange, dry_run=False).execute(decision, risk, price=2313.95)
+
+    assert result["protective_order_check_error"] == "RuntimeError('confirmation unavailable')"
+    assert "protective_order_warning" in result
+    assert "fail_safe" not in result
+    assert exchange.orders == [{"symbol": "ETHUSDT", "side": "SELL", "type": "MARKET", "quantity": "2.16"}]

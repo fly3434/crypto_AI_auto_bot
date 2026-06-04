@@ -14,7 +14,7 @@ An experimental AI-assisted Binance USDT-M futures trading bot. It collects mark
 - Adds a compact crypto news context to each AI decision from cached RSS/JSON sources, using news only as narrative and risk-event context.
 - Applies deterministic risk gates before any order is placed.
 - Manages existing positions instead of blindly skipping them: same-side signals hold, weak opposite signals hold, confirmed reversals close, and strong risk-approved reversals may close and reopen the opposite side.
-- Verifies live stop-loss and take-profit algo orders after entry, retries missing protection, and attempts a fail-safe close if protection cannot be confirmed.
+- Verifies live stop-loss and take-profit algo orders after entry, warns if confirmation lags, and attempts a fail-safe close only when protective order creation fails.
 - Logs every AI decision, feature snapshot, risk rejection, and order result to `logs/trading_journal.jsonl`.
 
 ## Quick Start
@@ -164,9 +164,11 @@ Set `position_management.enabled: false` to restore the older behavior that skip
 
 ## Live Order Protection
 
-In live mode, a new approved entry is not treated as complete just because the market entry was accepted. After the entry order, `src/executor.py` submits the reduce-only stop-loss and take-profit algo orders, then queries Binance open algo orders to confirm that both protective orders exist with the expected symbol, side, type, trigger price, quantity, and `reduceOnly` flag.
+In live mode, a new approved entry is not treated as complete just because the market entry was accepted. After the entry order, `src/executor.py` submits the reduce-only stop-loss and take-profit algo orders, then queries Binance open algo orders a few times to confirm that both protective orders exist with the expected symbol, side, type, trigger price, quantity, and `reduceOnly` flag.
 
-If either protective order is missing, the executor retries the missing order once and checks again. If protection still cannot be confirmed, the executor starts a fail-safe path:
+If Binance accepts both protective-order creation calls but the later open-order confirmation does not show them yet, the executor records `protective_order_warning` and keeps the position open. This avoids closing valid new entries because Binance's open algo order view is delayed or formats fields differently.
+
+If creating a stop-loss or take-profit algo order raises an error or is rejected, the executor starts a fail-safe path:
 
 - Re-read the latest actual position from Binance instead of trusting the earlier snapshot.
 - If the position is already flat, cancel stale algo orders and mark the fail-safe as closed.
@@ -243,7 +245,7 @@ The design allows aggressive objectives, but the runtime still enforces:
 - model output validation
 - position management for existing positions
 - reduce-only exits before reversing or closing positions
-- live stop-loss/take-profit confirmation with retry and fail-safe close
+- live stop-loss/take-profit creation fail-safe with delayed confirmation warnings
 
 ## Useful Files
 
