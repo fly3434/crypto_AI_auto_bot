@@ -2,7 +2,7 @@ from decimal import Decimal
 
 from src.ai_agent import TradeDecision
 from src.exchange import SymbolRules
-from src.executor import TradeExecutor
+from src.executor import TradeExecutor, _missing_protective_orders
 from src.risk import RiskResult
 
 
@@ -64,13 +64,13 @@ def test_executor_adjusts_quantity_and_prices_to_symbol_rules():
     assert result["entry"]["quantity"] == "2.16"
     assert result["stop"]["triggerPrice"] == "2290.81"
     assert result["take_profit"]["triggerPrice"] == "2364.85"
-    assert result["stop"]["quantity"] == "2.16"
-    assert result["stop"]["reduceOnly"] == "true"
-    assert "closePosition" not in result["stop"]
+    assert result["stop"]["closePosition"] == "true"
+    assert "quantity" not in result["stop"]
+    assert "reduceOnly" not in result["stop"]
     assert result["precision"]["raw_quantity"] == 2.160807
 
 
-def test_executor_uses_algo_endpoint_for_stop_and_take_profit_live_orders():
+def test_executor_uses_close_position_algo_endpoint_for_stop_and_take_profit_live_orders():
     exchange = FakeExchange()
     decision = TradeDecision(
         action="SELL",
@@ -94,10 +94,35 @@ def test_executor_uses_algo_endpoint_for_stop_and_take_profit_live_orders():
     assert all(order["algoType"] == "CONDITIONAL" for order in exchange.algo_orders)
     assert all("triggerPrice" in order for order in exchange.algo_orders)
     assert all("stopPrice" not in order for order in exchange.algo_orders)
-    assert all(order["quantity"] == "2.16" for order in exchange.algo_orders)
-    assert all(order["reduceOnly"] == "true" for order in exchange.algo_orders)
-    assert all("closePosition" not in order for order in exchange.algo_orders)
+    assert all(order["closePosition"] == "true" for order in exchange.algo_orders)
+    assert all("quantity" not in order for order in exchange.algo_orders)
+    assert all("reduceOnly" not in order for order in exchange.algo_orders)
     assert exchange.open_algo_orders("ETHUSDT") == exchange.algo_orders
+
+
+def test_protective_order_confirmation_matches_boolean_close_position_from_binance():
+    expected = {
+        "stop": {
+            "algoType": "CONDITIONAL",
+            "symbol": "ETHUSDT",
+            "side": "SELL",
+            "type": "STOP_MARKET",
+            "triggerPrice": "2290.81",
+            "closePosition": "true",
+            "workingType": "MARK_PRICE",
+        }
+    }
+    open_orders = [
+        {
+            "symbol": "ETHUSDT",
+            "side": "SELL",
+            "orderType": "STOP_MARKET",
+            "triggerPrice": "2290.810",
+            "closePosition": True,
+        }
+    ]
+
+    assert _missing_protective_orders(open_orders, expected) == []
 
 
 def test_executor_closes_existing_long_with_reduce_only_market_order():

@@ -44,9 +44,9 @@ class TradeExecutor:
                 "precision": precision,
                 "entry": {"symbol": decision.symbol, "side": side, "type": "MARKET", "quantity": quantity},
                 "cancel_stale_algo_orders": {"symbol": decision.symbol},
-                "stop": _algo_order_params(decision.symbol, close_side, "STOP_MARKET", stop_price_adjusted, quantity),
+                "stop": _algo_order_params(decision.symbol, close_side, "STOP_MARKET", stop_price_adjusted),
                 "take_profit": _algo_order_params(
-                    decision.symbol, close_side, "TAKE_PROFIT_MARKET", take_profit_price_adjusted, quantity
+                    decision.symbol, close_side, "TAKE_PROFIT_MARKET", take_profit_price_adjusted
                 ),
             }
 
@@ -60,9 +60,9 @@ class TradeExecutor:
             "entry": entry,
         }
         protective_orders = {
-            "stop": _algo_order_params(decision.symbol, close_side, "STOP_MARKET", stop_price_adjusted, quantity),
+            "stop": _algo_order_params(decision.symbol, close_side, "STOP_MARKET", stop_price_adjusted),
             "take_profit": _algo_order_params(
-                decision.symbol, close_side, "TAKE_PROFIT_MARKET", take_profit_price_adjusted, quantity
+                decision.symbol, close_side, "TAKE_PROFIT_MARKET", take_profit_price_adjusted
             ),
         }
         try:
@@ -180,15 +180,14 @@ class TradeExecutor:
         return sum(float(item.get("positionAmt", 0) or 0) for item in positions if item.get("symbol") == symbol)
 
 
-def _algo_order_params(symbol: str, side: str, order_type: str, trigger_price: str, quantity: str) -> dict[str, Any]:
+def _algo_order_params(symbol: str, side: str, order_type: str, trigger_price: str) -> dict[str, Any]:
     return {
         "algoType": "CONDITIONAL",
         "symbol": symbol,
         "side": side,
         "type": order_type,
-        "quantity": quantity,
         "triggerPrice": trigger_price,
-        "reduceOnly": "true",
+        "closePosition": "true",
         "workingType": "MARK_PRICE",
     }
 
@@ -205,15 +204,13 @@ def _missing_protective_orders(
 
 def _matches_algo_order(order: dict[str, Any], expected: dict[str, Any]) -> bool:
     order_type = order.get("type") or order.get("orderType")
-    quantity = order.get("quantity") or order.get("origQty")
     trigger_price = order.get("triggerPrice") or order.get("stopPrice")
     return (
         order.get("symbol") == expected["symbol"]
         and order.get("side") == expected["side"]
         and order_type == expected["type"]
-        and _same_decimal(quantity, expected["quantity"])
         and _same_decimal(trigger_price, expected["triggerPrice"])
-        and str(order.get("reduceOnly")).lower() == "true"
+        and str(order.get("closePosition")).lower() == "true"
     )
 
 
