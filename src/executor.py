@@ -17,9 +17,17 @@ class UnprotectedPositionError(RuntimeError):
 
 
 class TradeExecutor:
-    def __init__(self, exchange: BinanceFuturesClient, dry_run: bool = True) -> None:
+    def __init__(
+        self,
+        exchange: BinanceFuturesClient,
+        dry_run: bool = True,
+        position_visibility_delays: tuple[float, ...] = (0.0, 0.5, 1.0),
+        fail_safe_position_delays: tuple[float, ...] = (0.0, 0.5, 1.0, 2.0),
+    ) -> None:
         self.exchange = exchange
         self.dry_run = dry_run
+        self.position_visibility_delays = position_visibility_delays
+        self.fail_safe_position_delays = fail_safe_position_delays
 
     def execute(self, decision: TradeDecision, risk: RiskResult, price: float) -> dict[str, Any]:
         side = "BUY" if decision.action == "BUY" else "SELL"
@@ -65,6 +73,11 @@ class TradeExecutor:
                 decision.symbol, close_side, "TAKE_PROFIT_MARKET", take_profit_price_adjusted
             ),
         }
+        result["entry_position_check"] = self._wait_for_entry_position(decision.symbol, side)
+        if not result["entry_position_check"].get("visible"):
+            result["entry_position_warning"] = (
+                "Entry position was not visible before protective orders; submitting protective orders anyway."
+            )
         try:
             for label, params in protective_orders.items():
                 result[label] = self.exchange.new_algo_order(**params)
@@ -143,13 +156,15 @@ class TradeExecutor:
 
     def _fail_safe_close_position(self, symbol: str, entry_side: str) -> dict[str, Any]:
         try:
-            latest_position_amt = self._current_position(symbol)
+            position_check = self._wait_for_entry_position(symbol, entry_side, self.fail_safe_position_delays)
+            latest_position_amt = float(position_check["latest_position_amt"])
             if latest_position_amt == 0:
                 cancel_stale_algo_orders = self.exchange.cancel_all_algo_open_orders(symbol)
                 return {
-                    "closed": True,
-                    "status": "already_flat",
+                    "closed": False,
+                    "status": "position_not_visible_after_entry",
                     "latest_position_amt": latest_position_amt,
+                    "position_check": position_check,
                     "cancel_stale_algo_orders": cancel_stale_algo_orders,
                 }
             close_side = "SELL" if latest_position_amt > 0 else "BUY"
@@ -158,6 +173,7 @@ class TradeExecutor:
                     "closed": False,
                     "status": "position_side_mismatch",
                     "latest_position_amt": latest_position_amt,
+                    "position_check": position_check,
                     "entry_side": entry_side,
                     "close_side": close_side,
                 }
@@ -169,11 +185,30 @@ class TradeExecutor:
             return {
                 "closed": True,
                 "latest_position_amt": latest_position_amt,
+                "position_check": position_check,
                 "close": close,
                 "cancel_stale_algo_orders": cancel_stale_algo_orders,
             }
         except Exception as exc:
             return {"closed": False, "error": repr(exc)}
+
+    def _wait_for_entry_position(
+        self, symbol: str, entry_side: str, delays: tuple[float, ...] | None = None
+    ) -> dict[str, Any]:
+        attempts = []
+        latest_position_amt = 0.0
+        for delay_seconds in (delays if delays is not None else self.position_visibility_delays):
+            if delay_seconds:
+                time.sleep(delay_seconds)
+            latest_position_amt = self._current_position(symbol)
+            attempts.append({"delay_seconds": delay_seconds, "position_amt": latest_position_amt})
+            if _position_matches_entry_side(latest_position_amt, entry_side):
+                break
+        return {
+            "visible": _position_matches_entry_side(latest_position_amt, entry_side),
+            "latest_position_amt": latest_position_amt,
+            "attempts": attempts,
+        }
 
     def _current_position(self, symbol: str) -> float:
         positions = self.exchange.position_risk(symbol)
@@ -190,6 +225,10 @@ def _algo_order_params(symbol: str, side: str, order_type: str, trigger_price: s
         "closePosition": "true",
         "workingType": "MARK_PRICE",
     }
+
+
+def _position_matches_entry_side(position_amt: float, entry_side: str) -> bool:
+    return position_amt > 0 if entry_side == "BUY" else position_amt < 0
 
 
 def _missing_protective_orders(

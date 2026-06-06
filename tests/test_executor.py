@@ -2,7 +2,7 @@ from decimal import Decimal
 
 from src.ai_agent import TradeDecision
 from src.exchange import SymbolRules
-from src.executor import TradeExecutor, _missing_protective_orders
+from src.executor import TradeExecutor, UnprotectedPositionError, _missing_protective_orders
 from src.risk import RiskResult
 
 
@@ -86,10 +86,13 @@ def test_executor_uses_close_position_algo_endpoint_for_stop_and_take_profit_liv
     )
     risk = RiskResult(True, "Approved.", quantity=2.160807, leverage=5)
 
-    TradeExecutor(exchange, dry_run=False).execute(decision, risk, price=2313.95)
+    result = TradeExecutor(exchange, dry_run=False, position_visibility_delays=(0.0,)).execute(
+        decision, risk, price=2313.95
+    )
 
     assert exchange.orders == [{"symbol": "ETHUSDT", "side": "SELL", "type": "MARKET", "quantity": "2.16"}]
     assert exchange.canceled_algo_symbols == ["ETHUSDT"]
+    assert result["entry_position_check"]["visible"] is False
     assert [order["type"] for order in exchange.algo_orders] == ["STOP_MARKET", "TAKE_PROFIT_MARKET"]
     assert all(order["algoType"] == "CONDITIONAL" for order in exchange.algo_orders)
     assert all("triggerPrice" in order for order in exchange.algo_orders)
@@ -232,7 +235,9 @@ def test_executor_closes_entry_when_protective_order_creation_fails():
     )
     risk = RiskResult(True, "Approved.", quantity=2.160807, leverage=5)
 
-    result = TradeExecutor(exchange, dry_run=False).execute(decision, risk, price=2313.95)
+    result = TradeExecutor(exchange, dry_run=False, position_visibility_delays=(0.0,)).execute(
+        decision, risk, price=2313.95
+    )
 
     assert result["protective_order_error"] == "RuntimeError('take profit rejected')"
     assert result["fail_safe"]["closed"] is True
@@ -243,6 +248,97 @@ def test_executor_closes_entry_when_protective_order_creation_fails():
         "quantity": "2.16",
         "reduceOnly": "true",
     }
+
+
+def test_fail_safe_waits_for_delayed_position_before_closing_unprotected_entry():
+    class DelayedPositionExchange(FakeExchange):
+        def __init__(self):
+            super().__init__()
+            self.position_reads = 0
+
+        def position_risk(self, symbol):
+            self.position_reads += 1
+            if self.position_reads < 3:
+                return [{"symbol": symbol, "positionAmt": "0"}]
+            return [{"symbol": symbol, "positionAmt": "-2.16"}]
+
+        def new_algo_order(self, **params):
+            raise RuntimeError("stop rejected")
+
+        def new_order(self, **params):
+            self.orders.append(params)
+            if params.get("reduceOnly") == "true":
+                self.positions = [{"symbol": params["symbol"], "positionAmt": "0"}]
+            return params
+
+    exchange = DelayedPositionExchange()
+    decision = TradeDecision(
+        action="SELL",
+        confidence=0.75,
+        symbol="ETHUSDT",
+        leverage=5,
+        risk_pct=0.01,
+        stop_loss_pct=0.01,
+        take_profit_pct=0.022,
+        max_holding_minutes=240,
+        rationale="test",
+        high_risk_features_used=[],
+    )
+    risk = RiskResult(True, "Approved.", quantity=2.160807, leverage=5)
+
+    result = TradeExecutor(
+        exchange,
+        dry_run=False,
+        position_visibility_delays=(0.0,),
+        fail_safe_position_delays=(0.0, 0.0, 0.0),
+    ).execute(decision, risk, price=2313.95)
+
+    assert result["fail_safe"]["closed"] is True
+    assert result["fail_safe"]["position_check"]["attempts"] == [
+        {"delay_seconds": 0.0, "position_amt": 0.0},
+        {"delay_seconds": 0.0, "position_amt": -2.16},
+    ]
+    assert exchange.orders[-1] == {
+        "symbol": "ETHUSDT",
+        "side": "BUY",
+        "type": "MARKET",
+        "quantity": "2.16",
+        "reduceOnly": "true",
+    }
+
+
+def test_fail_safe_raises_when_unprotected_entry_position_never_becomes_visible():
+    class InvisiblePositionExchange(FakeExchange):
+        def new_algo_order(self, **params):
+            raise RuntimeError("stop rejected")
+
+    exchange = InvisiblePositionExchange()
+    decision = TradeDecision(
+        action="SELL",
+        confidence=0.75,
+        symbol="ETHUSDT",
+        leverage=5,
+        risk_pct=0.01,
+        stop_loss_pct=0.01,
+        take_profit_pct=0.022,
+        max_holding_minutes=240,
+        rationale="test",
+        high_risk_features_used=[],
+    )
+    risk = RiskResult(True, "Approved.", quantity=2.160807, leverage=5)
+
+    try:
+        TradeExecutor(
+            exchange,
+            dry_run=False,
+            position_visibility_delays=(0.0,),
+            fail_safe_position_delays=(0.0, 0.0),
+        ).execute(decision, risk, price=2313.95)
+    except UnprotectedPositionError as exc:
+        assert exc.result["fail_safe"]["closed"] is False
+        assert exc.result["fail_safe"]["status"] == "position_not_visible_after_entry"
+    else:
+        raise AssertionError("expected UnprotectedPositionError")
 
 
 def test_executor_does_not_close_entry_when_protective_order_confirmation_errors():
