@@ -164,9 +164,9 @@ Set `position_management.enabled: false` to restore the older behavior that skip
 
 ## Live Order Protection
 
-In live mode, a new approved entry is not treated as complete just because the market entry was accepted. After the entry order, `src/executor.py` submits stop-loss and take-profit algo orders with Binance's `closePosition=true` close-all behavior, then queries Binance open algo orders a few times to confirm that both protective orders exist with the expected symbol, side, type, trigger price, and `closePosition` flag.
+In live mode, a new approved entry is not treated as complete just because the market entry was accepted. Immediately before submitting a live entry, `src/executor.py` re-reads the current Binance position and rejects the entry unless the symbol is flat. After the entry order, it submits stop-loss and take-profit algo orders with Binance's `closePosition=true` close-all behavior, then queries Binance open algo orders a few times to confirm that both protective orders exist with the expected symbol, side, type, trigger price, and `closePosition` flag.
 
-The protective algo orders intentionally do not send `quantity` or `reduceOnly`. Binance does not allow those parameters together with `closePosition=true`, and close-position conditional orders are safer for this bot's full-position exit style because a stale protective trigger should attempt to close the current matching position instead of opening a fixed-size reverse order.
+The protective algo orders intentionally do not send `quantity` or `reduceOnly`. Binance does not allow those parameters together with `closePosition=true`, and close-position conditional orders avoid stale sibling TP/SL orders opening a reverse position after the first protective trigger has already flattened the symbol. To keep close-position orders scoped to a single position lifecycle, the executor refuses to add to any non-flat symbol.
 
 If Binance accepts both protective-order creation calls but the later open-order confirmation does not show them yet, the executor records `protective_order_warning` and keeps the position open. This avoids closing valid new entries because Binance's open algo order view is delayed or formats fields differently.
 

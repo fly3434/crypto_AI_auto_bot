@@ -2,7 +2,7 @@ from decimal import Decimal
 
 from src.ai_agent import TradeDecision
 from src.exchange import SymbolRules
-from src.executor import TradeExecutor, UnprotectedPositionError, _missing_protective_orders
+from src.executor import PositionNotFlatError, TradeExecutor, UnprotectedPositionError, _missing_protective_orders
 from src.risk import RiskResult
 
 
@@ -97,10 +97,41 @@ def test_executor_uses_close_position_algo_endpoint_for_stop_and_take_profit_liv
     assert all(order["algoType"] == "CONDITIONAL" for order in exchange.algo_orders)
     assert all("triggerPrice" in order for order in exchange.algo_orders)
     assert all("stopPrice" not in order for order in exchange.algo_orders)
+    assert result["pre_entry_position_amt"] == 0.0
     assert all(order["closePosition"] == "true" for order in exchange.algo_orders)
     assert all("quantity" not in order for order in exchange.algo_orders)
     assert all("reduceOnly" not in order for order in exchange.algo_orders)
     assert exchange.open_algo_orders("ETHUSDT") == exchange.algo_orders
+
+
+def test_executor_rejects_live_entry_when_position_is_not_flat():
+    exchange = FakeExchange()
+    exchange.positions = [{"symbol": "ETHUSDT", "positionAmt": "-1.5"}]
+    decision = TradeDecision(
+        action="SELL",
+        confidence=0.75,
+        symbol="ETHUSDT",
+        leverage=5,
+        risk_pct=0.01,
+        stop_loss_pct=0.01,
+        take_profit_pct=0.022,
+        max_holding_minutes=240,
+        rationale="test",
+        high_risk_features_used=[],
+    )
+    risk = RiskResult(True, "Approved.", quantity=2.160807, leverage=5)
+
+    try:
+        TradeExecutor(exchange, dry_run=False).execute(decision, risk, price=2313.95)
+    except PositionNotFlatError as exc:
+        assert exc.symbol == "ETHUSDT"
+        assert exc.position_amt == -1.5
+    else:
+        raise AssertionError("expected PositionNotFlatError")
+
+    assert exchange.orders == []
+    assert exchange.algo_orders == []
+    assert exchange.canceled_algo_symbols == []
 
 
 def test_protective_order_confirmation_matches_boolean_close_position_from_binance():

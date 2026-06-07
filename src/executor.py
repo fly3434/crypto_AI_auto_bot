@@ -16,6 +16,13 @@ class UnprotectedPositionError(RuntimeError):
         super().__init__(f"{symbol} entry may be unprotected after stop/take-profit failure.")
 
 
+class PositionNotFlatError(RuntimeError):
+    def __init__(self, symbol: str, position_amt: float) -> None:
+        self.symbol = symbol
+        self.position_amt = position_amt
+        super().__init__(f"{symbol} position is not flat before entry: {position_amt}.")
+
+
 class TradeExecutor:
     def __init__(
         self,
@@ -59,11 +66,15 @@ class TradeExecutor:
             }
 
         self.exchange.change_leverage(decision.symbol, risk.leverage)
+        pre_entry_position_amt = self._current_position(decision.symbol)
+        if pre_entry_position_amt != 0:
+            raise PositionNotFlatError(decision.symbol, pre_entry_position_amt)
         cancel_stale_algo_orders = self.exchange.cancel_all_algo_open_orders(decision.symbol)
         entry = self.exchange.new_order(symbol=decision.symbol, side=side, type="MARKET", quantity=quantity)
         result: dict[str, Any] = {
             "dry_run": False,
             "precision": precision,
+            "pre_entry_position_amt": pre_entry_position_amt,
             "cancel_stale_algo_orders": cancel_stale_algo_orders,
             "entry": entry,
         }
